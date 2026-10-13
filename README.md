@@ -2,7 +2,7 @@
 
 # VoiceStudio / CosyVoice3 粵語（廣東話）修復
 
-**令 CosyVoice3 引擎真正輸出粵語，而唔係普通話**
+**兩處修復：令下拉有得揀 Cantonese，再令 CosyVoice3 真正讀出粵語**
 
 *成功同失敗經驗全記錄，等同路人唔使再摸索*
 
@@ -15,6 +15,116 @@
 ## 問題
 
 喺 VoiceStudio 嘅 **Dub（配音）** 或 **TTS** 功能揀咗 `Cantonese / 粵語 / yue`，生成出嚟嘅語音**仍然係普通話**發音。文字係方塊字（繁體或者簡體都一樣），但把聲就係普通话。
+
+---
+
+> ### ⚠️ 要改兩處，缺一不可
+>
+> | # | 檔案 | 解決咩 |
+> | :-- | :--- | :--- |
+> | **1** | `resources/app.asar` | 下拉選單**根本冇** `Cantonese` 可揀 → 見下方「**第一步**」 |
+> | **2** | `backend/engines/cosyvoice_subprocess/main.py` | 揀咗都**照樣讀普通話**（引擎層問題）→ 見下方「**第二步**」 |
+>
+> 只做第 2 步：冇嘢俾你揀。只做第 1 步：揀咗都係普通話。
+
+---
+
+## 🔧 第一步：令下拉選單有 Cantonese（修改 `app.asar`）
+
+### 點解需要
+
+原裝 `app.asar` 嘅語言清單入面**根本冇 `yue`**，所以連揀都冇得揀：
+
+```js
+// frontend/src/utils/languages.js（打包後喺 out/renderer/assets/index-*.js）
+var LANG_CODES = [ … ];
+
+// Dub 頁用佢嚟產生下拉選項：
+var targetOptions = LANG_CODES.map((item) => item.label);
+
+// 揀中之後用 label 攞返 code，再傳俾後端：
+LANG_CODES.find((item) => item.label === language)?.code   // 例如 "Cantonese" -> "yue"
+```
+
+冇呢行 → 下拉冇 `Cantonese` → 後端點修都無用武之地。
+
+### 改咗邊度
+
+| 項目 | 值 |
+| :--- | :--- |
+| 檔案 | `out/renderer/assets/index-DjfLeGkU.js` |
+| 位置 | `LANG_CODES` 陣列，`my`（Burmese）同 `ca`（Catalan）之間 |
+| 大小 | 1,569,605 → 1,569,648 bytes（**+43**） |
+| SHA256 | `2a5e53e1…` → `c00c043a…` |
+
+```diff
+ 	},
++	{
++		code: "yue",
++		label: "Cantonese"
++	},
+ 	{
+ 		code: "ca",
+ 		label: "Catalan"
+```
+
+> ⚠️ 檔名後綴 `DjfLeGkU` 係 build hash，**每個 VoiceStudio 版本都唔同**。唔好硬記檔名，要用**內容特徵**去搵（下面嘅腳本就係咁做）。
+
+> 💡 你喺 `app.asar` 度 grep `Cantonese` 可能會撈到第二個檔案 `language-picker-*.js` — 嗰個係 **Whisper 轉錄（ASR）語言**清單（成堆 ISO 639-3 罕見語言名），同輸出語言**無關**，唔使改。經確認佢喺原裝同 patch 版都係 40,892 bytes、內容一致。
+
+### 點解唔可以「直接改 bytes」
+
+`app.asar` 開頭係一個 **14,250,656 bytes 嘅 JSON header**，入面記錄住：
+
+- **53,774** 個檔案嘅路徑
+- 每個檔案嘅 **SHA256 integrity hash**
+- 每個檔案喺 data section 嘅 **byte offset**
+
+你就咁插 43 bytes 入去，後面所有 offset 全部錯位、hash 全部唔吻合。啲 Electron build 會驗 integrity，即場爆。
+
+**唯一正確做法：`extract` → 改 → `pack`**，等 asar 工具自動重算 hash 同 offset。
+
+### 一鍵腳本
+
+[`scripts/patch-app-asar.mjs`](scripts/patch-app-asar.mjs)
+
+```sh
+node scripts/patch-app-asar.mjs "C:\Path\To\VoiceStudio\resources\app.asar"
+```
+
+- 自動備份做 `app.asar.original`（已有備份就唔覆蓋）
+- 用**內容特徵**（`label: "Catalan"`）搵目標檔，唔靠檔名 → 版本更新都啱
+- **Idempotent**：已經 patch 過就直接跳過
+- 自動偵測行尾（LF / CRLF），唔會整多啲差異
+- repack 之後列印 size / sha256 俾你核對
+
+**需求**：Node.js + 聯網（`npx` 會下載 `@electron/asar`）。Windows 如果 `npx` 俾 Execution Policy 擋，腳本會自動 fallback 走 `cmd /c`。
+
+### 點確認佢真係啱
+
+1. 由 `app.asar.original` 跑一次腳本
+2. 輸出 **470,747,695 bytes，SHA256 `BD5A21CE…49CCE`**
+3. 同已經實測可用嘅 `app.asar` **逐 byte 完全相同** — header 14,250,656 bytes 一模一樣、53,774 個檔案 entries **零差異**、目標 JS 內容 byte-exact
+
+| 檔案 | 大小 | SHA256 |
+| :--- | ---: | :--- |
+| `app.asar.original`（原裝備份） | 470,747,652 | `E437D60B3451D012CED7D36AD7FFAD8C14F31B484DF2AD6A532A6EEA0FA92D2E` |
+| `app.asar`（已 patch，實測可用） | 470,747,695 | `BD5A21CE6439C8315EAF19595F7C35610E6CEEDD7818352106930B6E84F49CCE` |
+
+（MD5 分別係 `AD85C9328A9701C9AB2D2B25EC004F2D` 同 `6C9030093A2CFAD8B9DA51BDC38C2A76`。）
+
+### 還原
+
+```sh
+copy /Y app.asar.original app.asar
+```
+
+### 風險 / 注意
+
+- **VoiceStudio 更新會覆蓋 `app.asar`** → 每次更新之後要重跑一次腳本
+- 改完**必須完全退出** VoiceStudio（確保 Electron 同後端 process 全部結束）再重啟先生效
+- 唔同版本嘅語言清單結構有機會改動 → 腳本搵唔到錨點會**明確報錯**而唔係亂改
+- 只加一個選項，**唔掂任何其他語言**嘅行為
 
 ---
 
@@ -90,7 +200,7 @@ model.inference_instruct2(
 
 ---
 
-## ✅ 成功嘅方案
+## ✅ 第二步：令引擎真正輸出粵語（修改 `main.py`）
 
 ### 簡體指令 `请用广东话表达`
 
@@ -192,39 +302,56 @@ language='yue' -> instruct='请用广东话表达'
 ### 前提
 
 - VoiceStudio 已安裝並使用 **CosyVoice3** 引擎（`Fun-CosyVoice3-0.5B`）
-- 修改後**必須重啟後端 / 重啟 app** 先生效
+- 第一步需要 **Node.js**（腳本會透過 `npx` 攞 `@electron/asar`）
+- 兩步做完**必須完全退出並重啟 app** 先生效
 
-### 步驟
-
-**1. 找到目標檔案**
-
-安裝目錄下嘅 `resources/backend/engines/cosyvoice_subprocess/main.py`
-
-部分安裝會有**兩份副本**（resources 同 project/backend）。如果兩份都存在，**兩份都要改，而且要保持一致**。
-
-**2. 套用 patch**
+### 第一步 — `app.asar`：令下拉有 `Cantonese`
 
 ```sh
-git apply --verbose patches/cosyvoice3-cantonese.patch
+node scripts/patch-app-asar.mjs "C:\Path\To\VoiceStudio\resources\app.asar"
 ```
 
-或者手動對照上面三段改動自己加。
+腳本自動備份做 `app.asar.original`，改完會列印 size / sha256 俾你對。
 
-**3. 重啟**
+### 第二步 — `main.py`：令引擎真正輸出粵語
 
-完全退出 VoiceStudio（確保後端 process 已結束），再重新啟動。
+目標檔案：`resources/backend/engines/cosyvoice_subprocess/main.py`
 
-**4. 驗證**
+部分安裝有**兩份副本**（`resources/` 同 `project/backend/`）。如果兩份都存在，**兩份都要改，而且要保持一致**。
 
-喺 Dub 揀 `Cantonese` 生成一段，然後睇後端 log 有冇：
+Patch 內嘅路徑係 `backend/...`，所以要喺 `resources` 目錄入面執行：
+
+```sh
+cd /d Path\To\VoiceStudio\resources
+git apply --verbose Path\To\cosyvoice3-cantonese.patch
+```
+
+或者手動對照「第二步」章節入面三段改動自己加。
+
+### 重啟
+
+完全退出 VoiceStudio（確保 Electron 同後端 process 全部結束），再重新啟動。
+
+### 驗證
+
+1. Dub 嘅目標語言下拉應該見到 **`Cantonese`**（第一步成果）
+2. 揀 `Cantonese` 生成一段，然後睇後端 log 有冇：
 
 ```
 language='yue' -> instruct='请用广东话表达'
 ```
 
+診斷：
+
+| 現象 | 代表 |
+| :--- | :--- |
+| 下拉**冇** `Cantonese` | 第一步未做，或者 app 更新咗覆蓋返 `app.asar` → 重跑腳本 |
+| 下拉有，但 log **冇**嗰行 | `language` 根本冇傳到引擎 |
+| log 有，但出嚟係**普通話** | 引擎 patch 未生效 → 確認兩份 `main.py` 都改咗 + 有冇真係重啟 |
+
 ### 如果你用開其他語言
 
-唔使擔心。改動只會喺 `language == "yue"` 時觸發，英語、日語、普通話等路徑一行都冇變。
+唔使擔心。兩處改動都**只對 `yue` 生效**，英語、日語、普通話等路徑一行都冇變。
 
 ---
 
@@ -253,7 +380,7 @@ _LANG_INSTRUCT = {
 | **[CosyVoice](https://github.com/FunAudioLLM/CosyVoice)** | [FunAudioLLM / 阿里巴巴](https://github.com/FunAudioLLM) | Apache-2.0 | CosyVoice3 模型、`example.py` 粵語 instruct 用法（本修復嘅關鍵靈感來源） |
 | **OmniVoice** | [Han Zhu](https://github.com/hanzhi713) | Apache-2.0 | VoiceStudio 預設 TTS 模型 |
 
-> 本 patch 以 **AGPL-3.0** 授權（與 VoiceStudio 上游一致）。修改過嘅 `main.py` 原始著作權屬 **Debpalash / VoiceStudio** 所有，請繼續遵守上游授權條款。
+> 本 repo 嘅 patch 同腳本均以 **AGPL-3.0** 授權（與 VoiceStudio 上游一致）。修改過嘅 `main.py` 及 `app.asar` 內原始著作權屬 **Debpalash / VoiceStudio** 所有，請繼續遵守上游授權條款。
 
 ---
 
