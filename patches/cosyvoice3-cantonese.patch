@@ -1,0 +1,54 @@
+diff --git a/backend/engines/cosyvoice_subprocess/main.py b/backend/engines/cosyvoice_subprocess/main.py
+index d41e08d..e737667 100644
+--- a/backend/engines/cosyvoice_subprocess/main.py
++++ b/backend/engines/cosyvoice_subprocess/main.py
+@@ -45,6 +45,16 @@ _LANG_TAGS = {
+     "es": "<|es|>", "fr": "<|fr|>", "it": "<|it|>",
+     "ru": "<|ru|>",
+ }
++#: CosyVoice 3 ships no language-tag tokens (``<|yue|>`` is not in its vocab),
++#: so the ONLY way to steer the spoken variety is the instruct string -- the way
++#: upstream's own Cantonese example does it. Simplified-Chinese phrasing is
++#: deliberate: A/B tests on the real model showed ``请用广东话表达`` was the only
++#: variant that reliably produced Cantonese. Adding ``香港`` or switching to
++#: ``粤语`` both flipped the output back to Mandarin (and Traditional-Chinese
++#: spelling of the instruction collapsed to a 0.2s clip).
++_LANG_INSTRUCT = {
++    "yue": "请用广东话表达",
++}
+ 
+ _MODEL = None
+ 
+@@ -269,6 +279,14 @@ def _lang_tag(language) -> str:
+     return _LANG_TAGS.get(full) or _LANG_TAGS.get(full[:2], "")
+ 
+ 
++def _lang_instruct(language) -> str:
++    """Language-variety instruct for v3 (which has no language tokens)."""
++    if not language:
++        return ""
++    full = str(language).lower()
++    return _LANG_INSTRUCT.get(full) or _LANG_INSTRUCT.get(full[:2], "")
++
++
+ def _run_model(model, msg: dict):
+     text = msg.get("text")
+     ref_audio = msg.get("ref_audio") or None
+@@ -278,6 +296,17 @@ def _run_model(model, msg: dict):
+     if not ref_audio and v3:
+         ref_audio = os.path.join(_checkout(), *_DEFAULT_PROMPT_CLIP)
+         ref_text = None  # the sample's transcript is not ours to supply
++    if v3:
++        # v3 has no language tokens, so steer the variety via instruct text.
++        # Prepend our language hint to any caller-supplied style instruct.
++        lang_hint = _lang_instruct(msg.get("language"))
++        if lang_hint:
++            instruct = f"{lang_hint} {instruct}".strip() if instruct else lang_hint
++            print(
++                f"language={msg.get('language')!r} -> instruct={instruct!r}",
++                file=sys.stderr,
++                flush=True,
++            )
+     if instruct and ref_audio:
+         return model.inference_instruct2(text, _instruct(instruct, v3), ref_audio, stream=False)
+     if ref_audio and ref_text:
