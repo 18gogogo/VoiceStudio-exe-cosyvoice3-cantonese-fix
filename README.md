@@ -305,6 +305,8 @@ language='yue' -> instruct='请用广东话表达'
 - 第一步需要 **Node.js**（腳本會透過 `npx` 取得 `@electron/asar`）
 - 兩步完成後**必須完全退出並重新啟動 app** 才生效
 
+> 🔧 **引擎本身還沒裝好？** 一鍵安裝 CosyVoice3 引擎的完整踩坑記錄（依賴衝突、bf16 精度陷阱、`sys.path`、磁碟空間、可續跑機制）見 [`docs/cosyvoice3-engine-install.md`](docs/cosyvoice3-engine-install.md)。
+
 ### 第一步 — `app.asar`：讓下拉出現 `Cantonese`
 
 ```sh
